@@ -2,31 +2,52 @@ package gitfs
 
 import (
 	"path/filepath"
+	"strings"
 
+	"github.com/go-git/go-billy/v5/memfs"
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/storage/memory"
 	"golang.org/x/net/webdav"
 )
 
 type Repo struct {
+	location     string
 	cwd          string
 	repo         *git.Repository
 	checkoutOpts *git.CheckoutOptions
 }
 
 func NewRepo(path string) *Repo {
-	path, err := filepath.Abs(path)
+	var err error
+	location := "local"
+	if strings.HasPrefix(path, "http") || strings.HasPrefix(path, "git@") {
+		location = "remote"
+	} else {
+		path, err = filepath.Abs(path)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	var repo *git.Repository
+	switch location {
+	case "local":
+		repo, err = git.PlainOpen(path)
+	case "remote":
+		repo, err = git.Clone(memory.NewStorage(), memfs.New(), &git.CloneOptions{URL: path})
+	}
 	if err != nil {
 		panic(err)
 	}
 
-	repo, err := git.PlainOpen(path)
-	if err != nil {
-		panic(err)
+	return &Repo{
+		location:     location,
+		cwd:          path,
+		repo:         repo,
+		checkoutOpts: &git.CheckoutOptions{},
 	}
-
-	return &Repo{cwd: path, repo: repo, checkoutOpts: &git.CheckoutOptions{}}
 }
 
 func (r *Repo) Branch(name string) (*config.Branch, error) {
