@@ -4,12 +4,12 @@ import (
 	"io"
 	"os"
 
-	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-git/v5"
 	"golang.org/x/net/webdav"
 )
 
 type File struct {
-	root   billy.Filesystem
+	*git.Worktree
 	name   string
 	flag   int
 	perm   os.FileMode
@@ -20,13 +20,13 @@ type fileStat interface {
 	Stat() (os.FileInfo, error)
 }
 
-func NewFile(root billy.Filesystem, name string, flag int, perm os.FileMode) webdav.File {
-	return &File{root: root, name: name, flag: flag, perm: perm}
+func NewFile(worktree *git.Worktree, name string, flag int, perm os.FileMode) webdav.File {
+	return &File{Worktree: worktree, name: name, flag: flag, perm: perm}
 }
 
 func (f *File) Close() error { return nil }
 func (f *File) Read(p []byte) (int, error) {
-	file, err := f.root.OpenFile(f.name, f.flag, f.perm)
+	file, err := f.Filesystem.OpenFile(f.name, f.flag, f.perm)
 	if err != nil {
 		return 0, err
 	}
@@ -56,14 +56,24 @@ func (f *File) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (f *File) Stat() (os.FileInfo, error) {
-	return f.root.Stat(f.name)
+	return f.Filesystem.Stat(f.name)
 }
 
 func (f *File) Write(p []byte) (int, error) {
-	file, err := f.root.OpenFile(f.name, f.flag, f.perm)
+	file, err := f.Filesystem.OpenFile(f.name, f.flag, f.perm)
 	if err != nil {
 		return 0, err
 	}
 
-	return file.Write(p)
+	n, err := file.Write(p)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = f.Add(f.name)
+	if err != nil {
+		return 0, err
+	}
+
+	return n, err
 }

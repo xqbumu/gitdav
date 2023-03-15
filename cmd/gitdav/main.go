@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"flag"
-	"log"
+	"fmt"
+	"io/fs"
 	"net/http"
 	"os"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/xqbumu/gitdav/pkg/gitfs"
+	"golang.org/x/exp/slog"
 	"golang.org/x/net/webdav"
 )
 
@@ -34,18 +38,52 @@ func main() {
 		repo.SetBranch(*branch, *create)
 	}
 
-	dav := webdav.Handler{
-		FileSystem: repo.GetDir(),
+	davPrefix := "/webdav"
+	davHandler := NewDavHandler(davPrefix, repo)
+
+	mux := chi.NewMux()
+	mux.Mount(davPrefix, davHandler)
+	mux.HandleFunc("/debug", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "Hello Debug\n")
+		fmt.Fprintf(w, "Cwd:\t%s\n", repo.Cwd())
+		fmt.Fprintf(w, "Head:\t%s\n", repo.Head())
+		buf := bytes.NewBuffer(nil)
+		err := repo.Walk(func(path string, info fs.FileInfo, err error) error {
+			if err != nil {
+				panic(err)
+			}
+			if info.IsDir() {
+				fmt.Fprintf(buf, "%s/%s/\n", path, info.Name())
+			} else {
+				fmt.Fprintf(buf, "%s/%s\n", path, info.Name())
+			}
+			return nil
+		})
+		if err != nil {
+			panic(err)
+		}
+		fmt.Fprintf(w, "Files:\n%s\n", buf.String())
+	})
+
+	slog.Info(fmt.Sprintf("serving requests for %s, at %s", repo.Cwd(), repo.Head()))
+	slog.With("err", http.ListenAndServe(*httpAddr, mux)).Warn("shutdown")
+}
+
+func NewDavHandler(prefix string, repo *gitfs.Repo) http.Handler {
+	return &webdav.Handler{
+		Prefix:     prefix,
+		FileSystem: repo.GetFileSystem(),
 		LockSystem: webdav.NewMemLS(),
 		Logger: func(req *http.Request, err error) {
-			log.Printf("%v %v %v\n", req.Method, req.URL, req.Proto)
+			slog.
+				With("proto", req.Proto).
+				With("method", req.Method).
+				With("url", req.URL).
+				Info("request")
 			if err != nil {
-				log.Printf("%+v", err)
+				slog.With("err", err).Error("error")
 				return
 			}
 		},
 	}
-
-	log.Printf("serving requests for %s, at %s", repo.Cwd(), repo.HEAD())
-	log.Fatalf("%+v", http.ListenAndServe(*httpAddr, &dav))
 }
